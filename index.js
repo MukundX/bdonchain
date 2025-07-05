@@ -91,6 +91,29 @@ const ADMIN_STEPS = {
 // Company types
 const COMPANY_TYPES = ['Startup', 'Agency', 'Individual'];
 
+// URL validation patterns
+const URL_PATTERNS = {
+    twitter: /^https?:\/\/(www\.)?(twitter\.com|x\.com)\/[a-zA-Z0-9_]{1,15}$/i,
+    linkedin: /^https?:\/\/(www\.)?linkedin\.com\/(in\/[a-zA-Z0-9-]{3,100}|company\/[a-zA-Z0-9-]{3,100})$/i
+};
+
+// URL validation function
+function validateURL(url, type) {
+    if (!url || url.trim() === '') return { valid: true, message: '' };
+    
+    const pattern = URL_PATTERNS[type];
+    if (!pattern.test(url)) {
+        return {
+            valid: false,
+            message: type === 'twitter' 
+                ? '❌ Please provide a valid Twitter/X profile URL (e.g., https://twitter.com/username or https://x.com/username)'
+                : '❌ Please provide a valid LinkedIn profile URL (e.g., https://linkedin.com/in/username or https://linkedin.com/company/companyname)'
+        };
+    }
+    
+    return { valid: true, message: '' };
+}
+
 // Initialize user state
 function initializeUserState(userId) {
     userStates.set(userId, {
@@ -150,6 +173,7 @@ async function handleSkip(chatId, userId, skipType) {
 
     if (skipType === 'twitter') {
         state.data.twitterUrl = '';
+        console.log(`Skipped Twitter URL for user ${userId}`);
         updateUserState(userId, { data: state.data, step: STEPS.LINKEDIN_URL });
         
         const linkedinKeyboard = {
@@ -159,9 +183,10 @@ async function handleSkip(chatId, userId, skipType) {
                 ]
             }
         };
-        await sendMessage(chatId, 'What\'s your LinkedIn profile URL?', linkedinKeyboard);
+        await sendMessage(chatId, 'What\'s your LinkedIn profile URL?\n\nExample: https://linkedin.com/in/username or https://linkedin.com/company/companyname', linkedinKeyboard);
     } else if (skipType === 'linkedin') {
         state.data.linkedinUrl = '';
+        console.log(`Skipped LinkedIn URL for user ${userId}`);
         updateUserState(userId, { data: state.data, step: STEPS.COMPANY_TYPE });
         
         const companyTypeKeyboard = {
@@ -261,45 +286,81 @@ async function handleTextInput(chatId, userId, text) {
                     ]
                 }
             };
-            await sendMessage(chatId, 'What\'s your X (Twitter) profile URL?', twitterKeyboard);
+            await sendMessage(chatId, 'What\'s your X (Twitter) profile URL?\n\nExample: https://twitter.com/username or https://x.com/username', twitterKeyboard);
             break;
 
         case STEPS.TWITTER_URL:
             if (text.toLowerCase() === 'skip') {
                 state.data.twitterUrl = '';
+                console.log(`Updated Twitter URL for user ${userId}: "skipped"`);
+                updateUserState(userId, { data: state.data, step: STEPS.LINKEDIN_URL });
+                
+                const linkedinKeyboard = {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '⏭️ Skip', callback_data: 'skip:linkedin' }]
+                        ]
+                    }
+                };
+                await sendMessage(chatId, 'What\'s your LinkedIn profile URL?\n\nExample: https://linkedin.com/in/username or https://linkedin.com/company/companyname', linkedinKeyboard);
             } else {
-                state.data.twitterUrl = text;
-            }
-            console.log(`Updated Twitter URL for user ${userId}: "${state.data.twitterUrl}"`);
-            updateUserState(userId, { data: state.data, step: STEPS.LINKEDIN_URL });
-            
-            const linkedinKeyboard = {
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '⏭️ Skip', callback_data: 'skip:linkedin' }]
-                    ]
+                // Validate Twitter URL
+                const validation = validateURL(text, 'twitter');
+                if (!validation.valid) {
+                    await sendMessage(chatId, validation.message);
+                    return; // Don't proceed to next step
                 }
-            };
-            await sendMessage(chatId, 'What\'s your LinkedIn profile URL?', linkedinKeyboard);
+                
+                state.data.twitterUrl = text;
+                console.log(`Updated Twitter URL for user ${userId}: "${state.data.twitterUrl}"`);
+                updateUserState(userId, { data: state.data, step: STEPS.LINKEDIN_URL });
+                
+                const linkedinKeyboard = {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '⏭️ Skip', callback_data: 'skip:linkedin' }]
+                        ]
+                    }
+                };
+                await sendMessage(chatId, 'What\'s your LinkedIn profile URL?', linkedinKeyboard);
+            }
             break;
 
         case STEPS.LINKEDIN_URL:
             if (text.toLowerCase() === 'skip') {
                 state.data.linkedinUrl = '';
+                console.log(`Updated LinkedIn URL for user ${userId}: "skipped"`);
+                updateUserState(userId, { data: state.data, step: STEPS.COMPANY_TYPE });
+                
+                const companyTypeKeyboard = {
+                    reply_markup: {
+                        inline_keyboard: [
+                            COMPANY_TYPES.map(type => ({ text: type, callback_data: `company_type:${type}` }))
+                        ]
+                    }
+                };
+                await sendMessage(chatId, 'What type of company are you?', companyTypeKeyboard);
             } else {
-                state.data.linkedinUrl = text;
-            }
-            console.log(`Updated LinkedIn URL for user ${userId}: "${state.data.linkedinUrl}"`);
-            updateUserState(userId, { data: state.data, step: STEPS.COMPANY_TYPE });
-            
-            const companyTypeKeyboard = {
-                reply_markup: {
-                    inline_keyboard: [
-                        COMPANY_TYPES.map(type => ({ text: type, callback_data: `company_type:${type}` }))
-                    ]
+                // Validate LinkedIn URL
+                const validation = validateURL(text, 'linkedin');
+                if (!validation.valid) {
+                    await sendMessage(chatId, validation.message);
+                    return; // Don't proceed to next step
                 }
-            };
-            await sendMessage(chatId, 'What type of company are you?', companyTypeKeyboard);
+                
+                state.data.linkedinUrl = text;
+                console.log(`Updated LinkedIn URL for user ${userId}: "${state.data.linkedinUrl}"`);
+                updateUserState(userId, { data: state.data, step: STEPS.COMPANY_TYPE });
+                
+                const companyTypeKeyboard = {
+                    reply_markup: {
+                        inline_keyboard: [
+                            COMPANY_TYPES.map(type => ({ text: type, callback_data: `company_type:${type}` }))
+                        ]
+                    }
+                };
+                await sendMessage(chatId, 'What type of company are you?', companyTypeKeyboard);
+            }
             break;
 
         case STEPS.LOOKING_FOR:

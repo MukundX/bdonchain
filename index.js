@@ -13,6 +13,54 @@ if (!BOT_TOKEN) {
 // Create bot instance
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
+// Bot statistics
+const botStats = {
+    totalUsers: new Set(),
+    totalRegistrations: 0,
+    weeklyMessages: {
+        sent: 0,
+        received: 0,
+        lastReset: new Date()
+    }
+};
+
+// Reset weekly stats every Monday
+function resetWeeklyStats() {
+    const now = new Date();
+    const lastReset = new Date(botStats.weeklyMessages.lastReset);
+    const daysSinceReset = Math.floor((now - lastReset) / (1000 * 60 * 60 * 24));
+    
+    if (daysSinceReset >= 7) {
+        botStats.weeklyMessages.sent = 0;
+        botStats.weeklyMessages.received = 0;
+        botStats.weeklyMessages.lastReset = now;
+        console.log('Weekly stats reset');
+    }
+}
+
+// Set bot commands
+async function setBotCommands() {
+    try {
+        await bot.setMyCommands([
+            {
+                command: 'start',
+                description: 'Start the registration process'
+            },
+            {
+                command: 'message',
+                description: '🔒 Send message to user (Admin only)'
+            },
+            {
+                command: 'stats',
+                description: '📊 View bot statistics (Admin only)'
+            }
+        ]);
+        console.log('Bot commands set successfully');
+    } catch (error) {
+        console.error('Error setting bot commands:', error);
+    }
+}
+
 // User states for conversation flow
 const userStates = new Map();
 
@@ -72,7 +120,10 @@ function clearUserState(userId) {
 // Send message with error handling
 async function sendMessage(chatId, text, options = {}) {
     try {
-        return await bot.sendMessage(chatId, text, options);
+        const result = await bot.sendMessage(chatId, text, options);
+        // Track sent messages
+        botStats.weeklyMessages.sent++;
+        return result;
     } catch (error) {
         console.error(`Error sending message to ${chatId}:`, error.message);
         return null;
@@ -129,6 +180,9 @@ async function handleConfirmation(chatId, userId, confirmed) {
 
     if (confirmed) {
         console.log(`User ${userId} confirmed registration. Data:`, JSON.stringify(state.data, null, 2));
+        
+        // Track registration
+        botStats.totalRegistrations++;
         
         // Send thank you message
         await sendMessage(chatId, '✅ Your information has been received. We\'ll contact you soon!');
@@ -331,6 +385,30 @@ async function handleAdminMessage(chatId, userId, messageText) {
     }
 }
 
+// Handle admin stats command
+async function handleAdminStats(chatId, userId) {
+    if (!ADMIN_IDS.includes(userId)) {
+        await sendMessage(chatId, '❌ You are not authorized to use this command.');
+        return;
+    }
+
+    // Reset weekly stats if needed
+    resetWeeklyStats();
+
+    const statsMessage = `📊 Bot Statistics
+
+👥 Total Users: ${botStats.totalUsers.size}
+✅ Total Registrations: ${botStats.totalRegistrations}
+
+📈 This Week:
+• Messages Sent: ${botStats.weeklyMessages.sent}
+• Messages Received: ${botStats.weeklyMessages.received}
+
+📅 Last Reset: ${new Date(botStats.weeklyMessages.lastReset).toLocaleDateString()}`;
+
+    await sendMessage(chatId, statsMessage);
+}
+
 // Bot event handlers
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
@@ -340,6 +418,10 @@ bot.on('message', async (msg) => {
     // Ignore messages without text
     if (!text) return;
 
+    // Track received messages
+    botStats.weeklyMessages.received++;
+    botStats.totalUsers.add(userId);
+
     try {
         // Handle commands
         if (text.startsWith('/')) {
@@ -347,6 +429,8 @@ bot.on('message', async (msg) => {
                 await handleStart(chatId, msg.from);
             } else if (text.startsWith('/message ')) {
                 await handleAdminMessage(chatId, userId, text);
+            } else if (text === '/stats') {
+                await handleAdminStats(chatId, userId);
             }
             return;
         }
@@ -415,4 +499,11 @@ process.on('SIGTERM', () => {
 // Start the bot
 console.log('🤖 Telegram bot is starting...');
 console.log(`👥 Admin IDs: ${ADMIN_IDS.join(', ')}`);
-console.log('✅ Bot is running. Press Ctrl+C to stop.'); 
+
+// Set bot commands
+setBotCommands().then(() => {
+    console.log('✅ Bot is running. Press Ctrl+C to stop.');
+}).catch(error => {
+    console.error('Error setting bot commands:', error);
+    console.log('✅ Bot is running. Press Ctrl+C to stop.');
+}); 

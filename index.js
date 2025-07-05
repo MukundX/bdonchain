@@ -58,6 +58,9 @@ function updateUserState(userId, updates) {
     if (state) {
         Object.assign(state, updates);
         userStates.set(userId, state);
+        console.log(`Updated state for user ${userId}:`, JSON.stringify(state, null, 2));
+    } else {
+        console.log(`No state found for user ${userId} when trying to update`);
     }
 }
 
@@ -125,6 +128,8 @@ async function handleConfirmation(chatId, userId, confirmed) {
     if (!state) return;
 
     if (confirmed) {
+        console.log(`User ${userId} confirmed registration. Data:`, JSON.stringify(state.data, null, 2));
+        
         // Send thank you message
         await sendMessage(chatId, '✅ Your information has been received. We\'ll contact you soon!');
 
@@ -147,7 +152,7 @@ async function forwardToAdmins(userId, userData) {
 👤 User Information:
 • Full Name: ${userData.fullName}
 • Username: @${userData.username}
-• User ID: ${userData.userId}
+• User ID: \`${userData.userId}\`
 
 🏢 Company Information:
 • Company Name: ${userData.companyName}
@@ -159,7 +164,7 @@ async function forwardToAdmins(userId, userData) {
 
     for (const adminId of ADMIN_IDS) {
         try {
-            await sendMessage(adminId, adminMessage);
+            await sendMessage(adminId, adminMessage, { parse_mode: 'Markdown' });
         } catch (error) {
             console.error(`Error forwarding to admin ${adminId}:`, error.message);
         }
@@ -198,6 +203,7 @@ async function handleTextInput(chatId, userId, text) {
             } else {
                 state.data.twitterUrl = text;
             }
+            console.log(`Updated Twitter URL for user ${userId}: "${state.data.twitterUrl}"`);
             updateUserState(userId, { data: state.data, step: STEPS.LINKEDIN_URL });
             
             const linkedinKeyboard = {
@@ -216,6 +222,7 @@ async function handleTextInput(chatId, userId, text) {
             } else {
                 state.data.linkedinUrl = text;
             }
+            console.log(`Updated LinkedIn URL for user ${userId}: "${state.data.linkedinUrl}"`);
             updateUserState(userId, { data: state.data, step: STEPS.COMPANY_TYPE });
             
             const companyTypeKeyboard = {
@@ -260,11 +267,18 @@ async function handleTextInput(chatId, userId, text) {
 
 // Handle /start command
 async function handleStart(chatId, user) {
+    console.log(`Starting conversation with user ${user.id}: ${user.first_name} ${user.last_name || ''}`);
+    
     // Initialize user state
     initializeUserState(user.id);
     
     // Update user info
     const state = getUserState(user.id);
+    if (!state) {
+        console.error(`Failed to get state for user ${user.id}`);
+        return;
+    }
+    
     state.data.fullName = user.first_name + (user.last_name ? ' ' + user.last_name : '');
     state.data.username = user.username || '';
     state.data.userId = user.id;
@@ -310,10 +324,10 @@ async function handleAdminMessage(chatId, userId, messageText) {
 
     try {
         await sendMessage(targetUserId, `📨 Message from admin:\n\n${text}`);
-        await sendMessage(chatId, `✅ Message sent to user ${targetUserId}`);
+        await sendMessage(chatId, `✅ Message sent to user \`${targetUserId}\``, { parse_mode: 'Markdown' });
     } catch (error) {
         console.error(`Error sending admin message to ${targetUserId}:`, error);
-        await sendMessage(chatId, `❌ Failed to send message to user ${targetUserId}: ${error.message}`);
+        await sendMessage(chatId, `❌ Failed to send message to user \`${targetUserId}\`: ${error.message}`, { parse_mode: 'Markdown' });
     }
 }
 

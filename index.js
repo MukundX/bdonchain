@@ -24,6 +24,10 @@ const botStats = {
     }
 };
 
+// Store recent users for admin message selection
+const recentUsers = new Map(); // userId -> { name, username, lastSeen }
+const MAX_RECENT_USERS = 20; // Maximum number of recent users to show
+
 // Reset weekly stats every Monday
 function resetWeeklyStats() {
     const now = new Date();
@@ -48,7 +52,7 @@ async function setBotCommands() {
             },
             {
                 command: 'message',
-                description: '🔒 Send message to user (Admin only)'
+                description: '🔒 Send message to user/all (Admin only)'
             },
             {
                 command: 'stats',
@@ -64,6 +68,9 @@ async function setBotCommands() {
 // User states for conversation flow
 const userStates = new Map();
 
+// Admin message composition states
+const adminMessageStates = new Map(); // adminUserId -> { targetUserId, step }
+
 // Conversation steps
 const STEPS = {
     WELCOME: 'welcome',
@@ -73,6 +80,12 @@ const STEPS = {
     COMPANY_TYPE: 'company_type',
     LOOKING_FOR: 'looking_for',
     CONFIRMATION: 'confirmation'
+};
+
+// Admin message steps
+const ADMIN_STEPS = {
+    SELECT_USER: 'select_user',
+    COMPOSE_MESSAGE: 'compose_message'
 };
 
 // Company types
@@ -354,25 +367,39 @@ async function handleAdminMessage(chatId, userId, messageText) {
         return;
     }
 
+    // Check if it's just /message (show user selection)
+    if (messageText.trim() === '/message') {
+        await showUserSelection(chatId);
+        return;
+    }
+
     // Remove the /message command from the text
     const textWithoutCommand = messageText.replace(/^\/message\s+/, '');
     const parts = textWithoutCommand.split(' ');
     
     if (parts.length < 2) {
-        await sendMessage(chatId, '❌ Usage: /message <userId> <text>');
+        await sendMessage(chatId, '❌ Usage: /message <userId> <text> or /message all <text>');
         return;
     }
 
-    const targetUserId = parseInt(parts[0]);
+    const target = parts[0].toLowerCase();
     const text = parts.slice(1).join(' ');
-
-    if (isNaN(targetUserId)) {
-        await sendMessage(chatId, '❌ Invalid user ID');
-        return;
-    }
 
     if (!text.trim()) {
         await sendMessage(chatId, '❌ Message text cannot be empty');
+        return;
+    }
+
+    // Handle "all" command
+    if (target === 'all') {
+        await sendMessageToAll(chatId, text);
+        return;
+    }
+
+    // Handle specific user ID
+    const targetUserId = parseInt(target);
+    if (isNaN(targetUserId)) {
+        await sendMessage(chatId, '❌ Invalid user ID. Use /message all <text> to send to all users.');
         return;
     }
 
@@ -382,6 +409,149 @@ async function handleAdminMessage(chatId, userId, messageText) {
     } catch (error) {
         console.error(`Error sending admin message to ${targetUserId}:`, error);
         await sendMessage(chatId, `❌ Failed to send message to user \`${targetUserId}\`: ${error.message}`, { parse_mode: 'Markdown' });
+    }
+}
+
+// Show user selection for admin message
+async function showUserSelection(chatId) {
+    if (recentUsers.size === 0) {
+        await sendMessage(chatId, '📭 No recent users found. Users will appear here after they interact with the bot.');
+        return;
+    }
+
+    // Sort users by last seen (most recent first)
+    const sortedUsers = Array.from(recentUsers.entries())
+        .sort((a, b) => b[1].lastSeen - a[1].lastSeen)
+        .slice(0, 10); // Show only 10 most recent users
+
+    const keyboard = [];
+    for (const [userId, userData] of sortedUsers) {
+        const displayName = userData.username ? `@${userData.username}` : userData.name;
+        const buttonText = `${displayName} (${userId})`;
+        keyboard.push([{ text: buttonText, callback_data: `select_user:${userId}` }]);
+    }
+
+    // Add "Send to All" button
+    keyboard.push([{ text: '📢 Send to All Users', callback_data: 'send_to_all' }]);
+
+    const message = `📨 Select a user to send a message to:\n\nRecent users (${sortedUsers.length}/${recentUsers.size}):`;
+    
+    await sendMessage(chatId, message, {
+        reply_markup: {
+            inline_keyboard: keyboard
+        }
+    });
+}
+
+// Send message to all recent users
+async function sendMessageToAll(adminChatId, messageText) {
+    if (recentUsers.size === 0) {
+        await sendMessage(adminChatId, '📭 No users to send message to.');
+        return;
+    }
+
+    const users = Array.from(recentUsers.keys());
+    let successCount = 0;
+    let failCount = 0;
+    const failedUsers = [];
+
+    // Send message to all users
+    for (const userId of users) {
+        try {
+            await sendMessage(userId, `📢 Announcement from admin:\n\n${messageText}`);
+            successCount++;
+        } catch (error) {
+            console.error(`Error sending message to user ${userId}:`, error);
+            failCount++;
+            failedUsers.push(userId);
+        }
+    }
+
+    // Send summary to admin
+    const summary = `📢 Message sent to all users:
+
+✅ Successfully sent: ${successCount} users
+❌ Failed to send: ${failCount} users
+
+${failCount > 0 ? `Failed user IDs: ${failedUsers.join(', ')}` : ''}`;
+
+    await sendMessage(adminChatId, summary);
+}
+
+// Handle user selection for admin message
+async function handleUserSelection(chatId, adminUserId, targetUserId) {
+    const userData = recentUsers.get(parseInt(targetUserId));
+    if (!userData) {
+        await sendMessage(chatId, '❌ User not found in recent users list.');
+        return;
+    }
+
+    // Set admin message state
+    adminMessageStates.set(adminUserId, {
+        targetUserId: parseInt(targetUserId),
+        step: ADMIN_STEPS.COMPOSE_MESSAGE
+    });
+
+    const displayName = userData.username ? `@${userData.username}` : userData.name;
+    const message = `📝 Composing message to: ${displayName} (\`${targetUserId}\`)\n\nPlease type your message:`;
+    
+    await sendMessage(chatId, message, { parse_mode: 'Markdown' });
+}
+
+// Handle send to all button
+async function handleSendToAll(chatId, adminUserId) {
+    if (recentUsers.size === 0) {
+        await sendMessage(chatId, '📭 No users to send message to.');
+        return;
+    }
+
+    // Set admin message state for "all" mode
+    adminMessageStates.set(adminUserId, {
+        targetUserId: 'all',
+        step: ADMIN_STEPS.COMPOSE_MESSAGE
+    });
+
+    const message = `📢 Composing announcement to all users (${recentUsers.size} users)\n\nPlease type your announcement message:`;
+    
+    await sendMessage(chatId, message);
+}
+
+// Handle admin message composition
+async function handleAdminMessageComposition(chatId, adminUserId, messageText) {
+    const adminState = adminMessageStates.get(adminUserId);
+    if (!adminState || adminState.step !== ADMIN_STEPS.COMPOSE_MESSAGE) {
+        return false; // Not in message composition mode
+    }
+
+    const targetUserId = adminState.targetUserId;
+
+    // Handle "all" case
+    if (targetUserId === 'all') {
+        await sendMessageToAll(chatId, messageText);
+        // Clear admin message state
+        adminMessageStates.delete(adminUserId);
+        return true; // Message handled
+    }
+
+    // Handle specific user
+    const userData = recentUsers.get(targetUserId);
+
+    try {
+        await sendMessage(targetUserId, `📨 Message from admin:\n\n${messageText}`);
+        
+        const displayName = userData ? (userData.username ? `@${userData.username}` : userData.name) : `User ${targetUserId}`;
+        await sendMessage(chatId, `✅ Message sent to ${displayName} (\`${targetUserId}\`)`, { parse_mode: 'Markdown' });
+        
+        // Clear admin message state
+        adminMessageStates.delete(adminUserId);
+        return true; // Message handled
+    } catch (error) {
+        console.error(`Error sending admin message to ${targetUserId}:`, error);
+        await sendMessage(chatId, `❌ Failed to send message to user \`${targetUserId}\`: ${error.message}`, { parse_mode: 'Markdown' });
+        
+        // Clear admin message state
+        adminMessageStates.delete(adminUserId);
+        return true; // Message handled
     }
 }
 
@@ -421,6 +591,21 @@ bot.on('message', async (msg) => {
     // Track received messages
     botStats.weeklyMessages.received++;
     botStats.totalUsers.add(userId);
+    
+    // Track recent users for admin message selection
+    const userName = msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : '');
+    recentUsers.set(userId, {
+        name: userName,
+        username: msg.from.username || '',
+        lastSeen: new Date()
+    });
+    
+    // Keep only recent users (remove oldest if exceeding limit)
+    if (recentUsers.size > MAX_RECENT_USERS) {
+        const oldestUser = Array.from(recentUsers.entries())
+            .sort((a, b) => a[1].lastSeen - b[1].lastSeen)[0];
+        recentUsers.delete(oldestUser[0]);
+    }
 
     try {
         // Handle commands
@@ -437,6 +622,15 @@ bot.on('message', async (msg) => {
 
         // Handle regular text input
         const state = getUserState(userId);
+        
+        // Check if admin is composing a message
+        if (ADMIN_IDS.includes(userId)) {
+            const messageHandled = await handleAdminMessageComposition(chatId, userId, text);
+            if (messageHandled) {
+                return; // Message was handled by admin composition
+            }
+        }
+        
         if (state && state.step !== STEPS.WELCOME && state.step !== STEPS.COMPANY_TYPE) {
             await handleTextInput(chatId, userId, text);
         } else if (!state) {
@@ -464,6 +658,11 @@ bot.on('callback_query', async (callbackQuery) => {
         } else if (data.startsWith('skip:')) {
             const skipType = data.split(':')[1];
             await handleSkip(chatId, userId, skipType);
+        } else if (data.startsWith('select_user:')) {
+            const targetUserId = data.split(':')[1];
+            await handleUserSelection(chatId, userId, targetUserId);
+        } else if (data === 'send_to_all') {
+            await handleSendToAll(chatId, userId);
         }
 
         // Answer callback query to remove loading state

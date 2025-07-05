@@ -76,6 +76,38 @@ async function sendMessage(chatId, text, options = {}) {
     }
 }
 
+// Handle skip button clicks
+async function handleSkip(chatId, userId, skipType) {
+    const state = getUserState(userId);
+    if (!state) return;
+
+    if (skipType === 'twitter') {
+        state.data.twitterUrl = '';
+        updateUserState(userId, { data: state.data, step: STEPS.LINKEDIN_URL });
+        
+        const linkedinKeyboard = {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '⏭️ Skip', callback_data: 'skip:linkedin' }]
+                ]
+            }
+        };
+        await sendMessage(chatId, 'What\'s your LinkedIn profile URL?', linkedinKeyboard);
+    } else if (skipType === 'linkedin') {
+        state.data.linkedinUrl = '';
+        updateUserState(userId, { data: state.data, step: STEPS.COMPANY_TYPE });
+        
+        const companyTypeKeyboard = {
+            reply_markup: {
+                inline_keyboard: [
+                    COMPANY_TYPES.map(type => ({ text: type, callback_data: `company_type:${type}` }))
+                ]
+            }
+        };
+        await sendMessage(chatId, 'What type of company are you?', companyTypeKeyboard);
+    }
+}
+
 // Handle company type selection
 async function handleCompanyTypeSelection(chatId, userId, companyType) {
     const state = getUserState(userId);
@@ -137,13 +169,27 @@ async function forwardToAdmins(userId, userData) {
 // Handle text input based on current step
 async function handleTextInput(chatId, userId, text) {
     const state = getUserState(userId);
-    if (!state) return;
+    if (!state) {
+        console.log(`No state found for user ${userId}`);
+        return;
+    }
+
+    console.log(`Processing text input for user ${userId}, step: ${state.step}, text: "${text}"`);
 
     switch (state.step) {
         case STEPS.COMPANY_NAME:
             state.data.companyName = text;
+            console.log(`Updated company name for user ${userId}: "${text}"`);
             updateUserState(userId, { data: state.data, step: STEPS.TWITTER_URL });
-            await sendMessage(chatId, 'What\'s your X (Twitter) profile URL? (Type "skip" if you don\'t have one)');
+            
+            const twitterKeyboard = {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '⏭️ Skip', callback_data: 'skip:twitter' }]
+                    ]
+                }
+            };
+            await sendMessage(chatId, 'What\'s your X (Twitter) profile URL?', twitterKeyboard);
             break;
 
         case STEPS.TWITTER_URL:
@@ -153,7 +199,15 @@ async function handleTextInput(chatId, userId, text) {
                 state.data.twitterUrl = text;
             }
             updateUserState(userId, { data: state.data, step: STEPS.LINKEDIN_URL });
-            await sendMessage(chatId, 'What\'s your LinkedIn profile URL? (Type "skip" if you don\'t have one)');
+            
+            const linkedinKeyboard = {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '⏭️ Skip', callback_data: 'skip:linkedin' }]
+                    ]
+                }
+            };
+            await sendMessage(chatId, 'What\'s your LinkedIn profile URL?', linkedinKeyboard);
             break;
 
         case STEPS.LINKEDIN_URL:
@@ -176,6 +230,7 @@ async function handleTextInput(chatId, userId, text) {
 
         case STEPS.LOOKING_FOR:
             state.data.lookingFor = text;
+            console.log(`Updated looking for for user ${userId}: "${text}"`);
             updateUserState(userId, { data: state.data, step: STEPS.CONFIRMATION });
 
             // Show summary for confirmation
@@ -231,17 +286,25 @@ async function handleAdminMessage(chatId, userId, messageText) {
         return;
     }
 
-    const parts = messageText.split(' ');
-    if (parts.length < 3) {
+    // Remove the /message command from the text
+    const textWithoutCommand = messageText.replace(/^\/message\s+/, '');
+    const parts = textWithoutCommand.split(' ');
+    
+    if (parts.length < 2) {
         await sendMessage(chatId, '❌ Usage: /message <userId> <text>');
         return;
     }
 
-    const targetUserId = parseInt(parts[1]);
-    const text = parts.slice(2).join(' ');
+    const targetUserId = parseInt(parts[0]);
+    const text = parts.slice(1).join(' ');
 
     if (isNaN(targetUserId)) {
         await sendMessage(chatId, '❌ Invalid user ID');
+        return;
+    }
+
+    if (!text.trim()) {
+        await sendMessage(chatId, '❌ Message text cannot be empty');
         return;
     }
 
@@ -249,6 +312,7 @@ async function handleAdminMessage(chatId, userId, messageText) {
         await sendMessage(targetUserId, `📨 Message from admin:\n\n${text}`);
         await sendMessage(chatId, `✅ Message sent to user ${targetUserId}`);
     } catch (error) {
+        console.error(`Error sending admin message to ${targetUserId}:`, error);
         await sendMessage(chatId, `❌ Failed to send message to user ${targetUserId}: ${error.message}`);
     }
 }
@@ -258,6 +322,9 @@ bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
     const text = msg.text;
+
+    // Ignore messages without text
+    if (!text) return;
 
     try {
         // Handle commands
@@ -296,6 +363,9 @@ bot.on('callback_query', async (callbackQuery) => {
         } else if (data.startsWith('confirm:')) {
             const confirmed = data.split(':')[1] === 'yes';
             await handleConfirmation(chatId, userId, confirmed);
+        } else if (data.startsWith('skip:')) {
+            const skipType = data.split(':')[1];
+            await handleSkip(chatId, userId, skipType);
         }
 
         // Answer callback query to remove loading state
